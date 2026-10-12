@@ -1,0 +1,15 @@
+// hfpc-feedback — 全艦隊共用的「👍 按讚 + 留言(先待審)」Worker(like-comment-kit skill 的活實作,2026-10-12)。
+// 部署:npx wrangler deploy;建表:npx wrangler d1 execute hfpc-feedback --remote --file schema.sql
+// 密碼:npx wrangler secret put ADMIN_KEY(後台)、npx wrangler secret put TURNSTILE_SECRET(自由留言防機器人)
+{
+  "name": "hfpc-feedback",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-01",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "hfpc-feedback", "database_id": "9c024920-36a0-4fd3-ac4f-0c40fe9eff4e" }
+  ],
+  "vars": {
+    // Turnstile 公開 sitekey(不是祕密);widget 自由留言模式用。網域清單在 CF 後台 Turnstile 管。
+    "TURNSTILE_SITEKEY": "0x4AAAAAAFUqqRHiRInKkIIt"
+  }
+}
