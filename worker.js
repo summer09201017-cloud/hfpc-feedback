@@ -219,6 +219,7 @@ function widgetJs(env) {
   const src = `(function(){
 var s=document.currentScript;if(!s)return;
 var g=s.getAttribute('data-g')||'',mode=s.getAttribute('data-mode')==='kids'?'kids':'free',title=s.getAttribute('data-title')||document.title||'';
+var LIKE=s.getAttribute('data-like')||(mode==='kids'?'👍 好玩就按個讚':'👍 好聽就按個讚');
 if(!/^[a-z0-9][a-z0-9-]{0,59}$/.test(g))return;
 var API=${JSON.stringify('https://hfpc-feedback.summer09201017.workers.dev')},SITEKEY=${JSON.stringify(env.TURNSTILE_SITEKEY || '')},PRESETS=${JSON.stringify(PRESETS)};
 var root=document.getElementById('hfpc-feedback');if(!root){root=document.createElement('div');root.id='hfpc-feedback';s.parentNode.insertBefore(root,s.nextSibling);}
@@ -235,7 +236,7 @@ var css='#hfpc-feedback{font:inherit;line-height:1.5;margin:16px 0}#hfpc-feedbac
 '#hfpc-feedback .hf-hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}#hfpc-feedback .hf-small{opacity:.7;font-size:.9em;margin:4px 0}';
 var st=document.createElement('style');st.textContent=css;document.head.appendChild(st);
 function el(t,a,c){var e=document.createElement(t);for(var k in (a||{})){if(k==='text')e.textContent=a[k];else if(k==='html')e.innerHTML=a[k];else e.setAttribute(k,a[k]);}(c||[]).forEach(function(x){e.appendChild(x)});return e;}
-var likeBtn=el('button',{type:'button','class':'hf-like'+(liked?' on':''),text:(liked?'👍 已按讚':'👍 好聽就按個讚')+' · 0'});
+var likeBtn=el('button',{type:'button','class':'hf-like'+(liked?' on':''),text:(liked?'👍 已按讚':LIKE)+' · 0'});
 var likeRow=el('p',{},[likeBtn]);
 var msg=el('p',{'class':'hf-msg',role:'status'});
 var list=el('ul',{'class':'hf-list'});
@@ -248,7 +249,7 @@ if(mode==='free'){ta=el('textarea',{maxlength:'300',placeholder:'想說的話(�
  if(SITEKEY){cfDiv=el('div',{'class':'hf-cf'});form.appendChild(cfDiv);}}
 form.appendChild(hp);form.appendChild(send);form.appendChild(msg);
 root.appendChild(el('div',{},[likeRow,form,list]));
-function setLikes(n){likeBtn.textContent=(liked?'👍 已按讚':'👍 好聽就按個讚')+' · '+Number(n||0).toLocaleString('zh-TW');}
+function setLikes(n){likeBtn.textContent=(liked?'👍 已按讚':LIKE)+' · '+Number(n||0).toLocaleString('zh-TW');}
 function render(d){setLikes(d.likes);list.innerHTML='';(d.comments||[]).forEach(function(c){var li=el('li',{},[el('span',{text:c.text}),el('span',{'class':'hf-who',text:'  — '+(c.name||'匿名')+(c.at?' · '+c.at.slice(0,10):'')})]);list.appendChild(li);});}
 function load(){fetch(API+'/api/feedback?g='+encodeURIComponent(g)).then(function(r){return r.ok?r.json():null}).then(function(d){if(d)render(d)}).catch(function(){});}
 load();
