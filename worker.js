@@ -130,15 +130,20 @@ async function postComment(request, env) {
   const g = String(body.g || '')
   if (!G_RE.test(g)) return json({ ok: false, error: 'bad id' }, 400)
   if (body.hp) return json({ ok: true, pending: true })                   // honeypot 有填 = 機器人
-  const preset = PRESET_SET.has(String(body.text || '').trim())
-  const text = clean(body.text, 300)
-  if (!text) return json({ ok: false, error: '留言是空的' }, 400)
+  // 1013 使用者拍板:短語可以一次多選(body.presets 陣列,最多 6 句、重複的只算一次),跟自己打的字可以一起送
+  const picks = []
+  for (const x of (Array.isArray(body.presets) ? body.presets : [])) { const t = String(x || '').trim(); if (PRESET_SET.has(t) && !picks.includes(t)) picks.push(t) }
+  let raw = String(body.text || '').trim()
+  if (PRESET_SET.has(raw)) { if (!picks.includes(raw)) picks.push(raw); raw = '' }   // 舊版 widget:短語放在 text
+  const text = clean(raw, 300)
+  if (!picks.length && !text) return json({ ok: false, error: '留言是空的' }, 400)
+  const preset = !text
   const mode = body.mode === 'kids' ? 'kids' : 'free'
-  if (mode === 'kids' && !preset) return json({ ok: false, error: '這個站只能選上面的短語喔' }, 400)
+  // 1013 使用者拍板:兒童站也要能自己打字(兩種留言方式都要有)——自己打的字照樣過個資擋 + Turnstile + 待審;兒童站不收暱稱
   let name = ''
   if (!preset) {
     if (PII_RE.test(text)) return json({ ok: false, error: '留言請不要放電話、Email、網址或帳號等個人資料喔' }, 400)
-    name = clean(body.name, 20)
+    name = mode === 'kids' ? '' : clean(body.name, 20)
     if (name && PII_RE.test(name)) return json({ ok: false, error: '暱稱請不要放電話或帳號' }, 400)
     // 自由輸入:Turnstile(有設祕密才驗;沒設就只靠待審 + 頻率)
     if (env.TURNSTILE_SECRET) {
@@ -155,9 +160,12 @@ async function postComment(request, env) {
   const h = await ipHash(request)
   if (!(await rateOk(env, `cm:${h}`, preset ? 10 : 30))) return json({ ok: false, error: '太快了,請稍等一下再留言' }, 429)
   const title = clean(body.title, 80) || null
-  // 短語是固定清單裡的字、沒有暱稱,不可能夾帶個資或髒話 ⇒ 不用審,直接顯示(1013 使用者拍板)
-  await env.DB.prepare('INSERT INTO comments(g, title, name, text, preset, status) VALUES(?,?,?,?,?,?)').bind(g, title, name || null, text, preset ? 1 : 0, preset ? 'approved' : 'pending').run()
-  return json({ ok: true, pending: !preset })
+  // 短語是固定清單裡的字、沒有暱稱,不可能夾帶個資或髒話 ⇒ 不用審,直接顯示(1013 使用者拍板);自己打的字存 pending
+  const ins = 'INSERT INTO comments(g, title, name, text, preset, status) VALUES(?,?,?,?,?,?)'
+  const stmts = picks.map((t) => env.DB.prepare(ins).bind(g, title, null, t, 1, 'approved'))
+  if (text) stmts.push(env.DB.prepare(ins).bind(g, title, name || null, text, 0, 'pending'))
+  await env.DB.batch(stmts)
+  return json({ ok: true, pending: !!text, presets: picks.length })
 }
 
 // ── 後台 ──
@@ -251,12 +259,12 @@ var likeBtn=el('button',{type:'button','class':'hf-like'+(liked?' on':''),text:(
 var likeRow=el('p',{},[likeBtn]);
 var msg=el('p',{'class':'hf-msg',role:'status'});
 var list=el('ul',{'class':'hf-list'}),tally=el('div',{'class':'hf-tally'});
-var chips=el('div',{'class':'hf-chips'});var chosen='';
-PRESETS.forEach(function(p){var b=el('button',{type:'button',text:p});b.onclick=function(){chosen=(chosen===p?'':p);[].forEach.call(chips.children,function(x){x.className=(x.textContent===chosen)?'on':''});if(ta)ta.value=chosen;};chips.appendChild(b);});
+var chips=el('div',{'class':'hf-chips'});var picked=[];
+PRESETS.forEach(function(p){var b=el('button',{type:'button',text:p,'aria-pressed':'false'});b.onclick=function(){var i=picked.indexOf(p);if(i<0)picked.push(p);else picked.splice(i,1);var on=picked.indexOf(p)>=0;b.className=on?'on':'';b.setAttribute('aria-pressed',on?'true':'false');};chips.appendChild(b);});
 var ta=null,nameIn=null,hp=el('input',{'class':'hf-hp',tabindex:'-1',autocomplete:'off','aria-hidden':'true'}),cfDiv=null,cfId=null;
 var send=el('button',{type:'button','class':'hf-send',text:'送出留言'});
-var form=el('div',{},[el('p',{'class':'hf-small',text:mode==='kids'?'點一個想說的話,送出就會出現在下面。':'點上面的短語送出會直接出現;自己打的字會先經過審核才顯示,請不要留電話、Email 等個人資料。'}),chips]);
-if(mode==='free'){ta=el('textarea',{maxlength:'300',placeholder:'想說的話(最多 300 字)'});nameIn=el('input',{maxlength:'20',placeholder:'暱稱(可不填)'});form.appendChild(ta);form.appendChild(nameIn);
+var form=el('div',{},[el('p',{'class':'hf-small',text:mode==='kids'?'短語可以一次點好幾句,送出馬上就會出現在下面;自己打的字要等老師看過才會出現(不要寫電話、地址、姓名喔)。':'上面的短語可以一次點好幾句,送出會直接出現;自己打的字會先經過審核才顯示,請不要留電話、Email 等個人資料。'}),chips]);
+{ta=el('textarea',{maxlength:'300',placeholder:mode==='kids'?'也可以自己打字(最多 300 字)':'想說的話(最多 300 字)'});form.appendChild(ta);if(mode==='free'){nameIn=el('input',{maxlength:'20',placeholder:'暱稱(可不填)'});form.appendChild(nameIn);}
  if(SITEKEY){cfDiv=el('div',{'class':'hf-cf'});form.appendChild(cfDiv);}}
 form.appendChild(hp);form.appendChild(send);form.appendChild(msg);
 var body=el('div',{},[likeRow,form,tally,list]),sum=null;
@@ -272,12 +280,12 @@ likeBtn.onclick=function(){if(liked)return;liked=true;try{localStorage.setItem(L
 function ensureCf(){if(!cfDiv||cfId!==null)return;cfId=false;function go(){try{cfId=window.turnstile.render(cfDiv,{sitekey:SITEKEY,language:'zh-tw'});}catch(e){cfId=false}}
  if(window.turnstile)go();else{var sc=document.createElement('script');sc.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';sc.async=true;sc.onload=go;document.head.appendChild(sc);}}
 if(ta){ta.addEventListener('focus',ensureCf);}chips.addEventListener('click',ensureCf);
-send.onclick=function(){var text=(ta?ta.value:chosen).trim();if(!text){msg.className='hf-msg err';msg.textContent=mode==='kids'?'先點一個短語喔':'先寫點什麼吧';return;}
- var body={g:g,title:title,mode:mode,text:text,name:nameIn?nameIn.value:'',hp:hp.value};
+send.onclick=function(){var text=(ta?ta.value:'').trim();if(!text&&!picked.length){msg.className='hf-msg err';msg.textContent=mode==='kids'?'先點一句短語,或自己打幾個字喔':'先點一句短語,或寫點什麼吧';return;}
+ var body={g:g,title:title,mode:mode,presets:picked.slice(),text:text,name:nameIn?nameIn.value:'',hp:hp.value};
  if(cfDiv&&window.turnstile&&cfId!==null&&cfId!==false){try{body.cf=window.turnstile.getResponse(cfId)||'';}catch(e){}}
  send.disabled=true;msg.className='hf-msg';msg.textContent='送出中…';
  fetch(API+'/api/comment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(d){
-  send.disabled=false;if(d&&d.ok){msg.className='hf-msg ok';msg.textContent=d.pending?'收到了,謝謝!審核通過後就會出現在這裡。':'收到了,謝謝!';if(!d.pending)load();if(ta)ta.value='';chosen='';[].forEach.call(chips.children,function(x){x.className=''});if(cfDiv&&window.turnstile&&cfId){try{window.turnstile.reset(cfId)}catch(e){}}}
+  send.disabled=false;if(d&&d.ok){msg.className='hf-msg ok';msg.textContent=d.pending?(d.presets?'收到了,謝謝!短語已經放上去;自己打的字審核通過後才會出現。':'收到了,謝謝!審核通過後就會出現在這裡。'):'收到了,謝謝!';if(d.presets)load();if(ta)ta.value='';picked=[];[].forEach.call(chips.children,function(x){x.className='';x.setAttribute('aria-pressed','false')});if(cfDiv&&window.turnstile&&cfId){try{window.turnstile.reset(cfId)}catch(e){}}}
   else{msg.className='hf-msg err';msg.textContent=(d&&d.error)||'送出失敗,請再試一次';}}).catch(function(){send.disabled=false;msg.className='hf-msg err';msg.textContent='網路不通,請稍後再試';});};
 })();`
   return new Response(src, { headers: { ...CORS, 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=600' } })
