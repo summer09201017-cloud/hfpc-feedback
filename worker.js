@@ -12,7 +12,7 @@
 //   GET  /api/feedback?g=<id>            — {likes, liked:false, comments:[{id,name,text,preset,at}]}(只回已放行)
 //   GET  /api/feedback?all=1             — {likes:{g:n}}(首頁卡片用)
 //   POST /api/like?g=<id>                — 按讚 +1(body 可帶 {title})
-//   POST /api/comment                    — {g,title,name,text,preset,cf,hp} → 存 pending
+//   POST /api/comment                    — {g,title,name,text,preset,cf,hp} → 預設短語直接 approved(1013 使用者拍板:不能打字就不用審);自己打的字存 pending
 //   GET  /admin?key=<ADMIN_KEY>          — 待審清單 + 放行/刪除 + 各作品讚數排行
 //   POST /admin/act?key=&id=&a=approve|reject|delete
 //
@@ -93,9 +93,13 @@ async function getFeedback(url, env) {
   const g = url.searchParams.get('g') || ''
   if (!G_RE.test(g)) return json({ ok: false, error: 'bad id' }, 400)
   const like = await env.DB.prepare('SELECT n FROM likes WHERE g=?').bind(g).first()
-  const rows = (await env.DB.prepare("SELECT id, name, text, preset, created_at FROM comments WHERE g=? AND status='approved' ORDER BY id DESC LIMIT 50").bind(g).all()).results || []
+  const rows = (await env.DB.prepare("SELECT id, name, text, preset, created_at FROM comments WHERE g=? AND status='approved' AND preset=0 ORDER BY id DESC LIMIT 50").bind(g).all()).results || []
+  // 短語只給計數(「😊 太好玩了 × 12」),不逐筆列,免得同一句洗版
+  const pr = (await env.DB.prepare("SELECT text, COUNT(*) AS n FROM comments WHERE g=? AND status='approved' AND preset=1 GROUP BY text").bind(g).all()).results || []
+  const presets = {}
+  for (const r of pr) presets[r.text] = r.n
   return json({
-    ok: true, likes: (like && like.n) || 0,
+    ok: true, likes: (like && like.n) || 0, presets,
     comments: rows.map((r) => ({ id: r.id, name: r.name || '', text: r.text, preset: !!r.preset, at: r.created_at })),
   })
 }
@@ -118,7 +122,7 @@ async function postLike(request, url, env) {
   return json({ ok: true, likes: like.n })
 }
 
-// ── 留言(存 pending)──
+// ── 留言(短語直接上;自己打的字存 pending)──
 async function postComment(request, env) {
   const ua = request.headers.get('User-Agent') || ''
   if (!ua || BOT_RE.test(ua)) return json({ ok: true, pending: true })   // 爬蟲:假裝收下,實際不存
@@ -151,8 +155,9 @@ async function postComment(request, env) {
   const h = await ipHash(request)
   if (!(await rateOk(env, `cm:${h}`, preset ? 10 : 30))) return json({ ok: false, error: '太快了,請稍等一下再留言' }, 429)
   const title = clean(body.title, 80) || null
-  await env.DB.prepare('INSERT INTO comments(g, title, name, text, preset) VALUES(?,?,?,?,?)').bind(g, title, name || null, text, preset ? 1 : 0).run()
-  return json({ ok: true, pending: true })
+  // 短語是固定清單裡的字、沒有暱稱,不可能夾帶個資或髒話 ⇒ 不用審,直接顯示(1013 使用者拍板)
+  await env.DB.prepare('INSERT INTO comments(g, title, name, text, preset, status) VALUES(?,?,?,?,?,?)').bind(g, title, name || null, text, preset ? 1 : 0, preset ? 'approved' : 'pending').run()
+  return json({ ok: true, pending: !preset })
 }
 
 // ── 後台 ──
@@ -183,7 +188,7 @@ async function admin(request, url, env) {
   }
   const key = esc(url.searchParams.get('key'))
   const pending = (await env.DB.prepare("SELECT * FROM comments WHERE status='pending' ORDER BY id ASC LIMIT 200").all()).results || []
-  const recent = (await env.DB.prepare("SELECT * FROM comments WHERE status='approved' ORDER BY id DESC LIMIT 50").all()).results || []
+  const recent = (await env.DB.prepare("SELECT * FROM comments WHERE status='approved' AND preset=0 ORDER BY id DESC LIMIT 50").all()).results || []
   const likes = (await env.DB.prepare('SELECT g, n, title FROM likes ORDER BY n DESC LIMIT 100').all()).results || []
   const msg = url.searchParams.get('msg') || ''
   const card = (r, acts) => `<div class="c"><p class="m">${esc(r.title || r.g)} <span class="badge">${esc(r.g)}</span> · ${TPE(r.created_at)}${r.name ? ' · ' + esc(r.name) : ''}${r.preset ? ' · 短語' : ''}</p><p class="t">${esc(r.text)}</p>${acts}</div>`
@@ -236,6 +241,7 @@ var css='#hfpc-feedback{font:inherit;line-height:1.5;margin:16px 0}#hfpc-feedbac
 '#hfpc-feedback textarea,#hfpc-feedback input{font:inherit;color:#333;background:#fff;width:100%;padding:10px;border:1px solid #bbb;border-radius:8px;margin:6px 0}#hfpc-feedback textarea{min-height:88px}'+
 '#hfpc-feedback .hf-send{font:inherit;min-height:44px;padding:8px 20px;border-radius:8px;border:0;background:#2a7a3b;color:#fff;cursor:pointer}#hfpc-feedback .hf-send:disabled{opacity:.6}'+
 '#hfpc-feedback .hf-msg{margin:8px 0;min-height:1.5em}#hfpc-feedback .hf-msg.err{color:#b3261e}#hfpc-feedback .hf-msg.ok{color:#2a7a3b}'+
+'#hfpc-feedback .hf-tally{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 0 0;font-weight:600}#hfpc-feedback .hf-tally:empty{display:none}'+
 '#hfpc-feedback .hf-list{list-style:none;padding:0;margin:12px 0 0}#hfpc-feedback .hf-list li{border-top:1px solid #e5e0d8;padding:8px 0}#hfpc-feedback .hf-list .hf-who{opacity:.65;font-size:.9em}'+
 '#hfpc-feedback .hf-hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}#hfpc-feedback .hf-small{opacity:.7;font-size:.9em;margin:4px 0}'+
 '#hfpc-feedback .hf-fold>summary{cursor:pointer;display:inline-block;min-height:44px;padding:8px 18px;border-radius:999px;border:2px solid #d9534f;background:#fff;color:#d9534f;font-weight:600;list-style:none}#hfpc-feedback .hf-fold>summary::-webkit-details-marker{display:none}#hfpc-feedback .hf-fold[open]>summary{margin-bottom:8px}';
@@ -244,21 +250,21 @@ function el(t,a,c){var e=document.createElement(t);for(var k in (a||{})){if(k===
 var likeBtn=el('button',{type:'button','class':'hf-like'+(liked?' on':''),text:(liked?'👍 已按讚':LIKE)+' · 0'});
 var likeRow=el('p',{},[likeBtn]);
 var msg=el('p',{'class':'hf-msg',role:'status'});
-var list=el('ul',{'class':'hf-list'});
+var list=el('ul',{'class':'hf-list'}),tally=el('div',{'class':'hf-tally'});
 var chips=el('div',{'class':'hf-chips'});var chosen='';
 PRESETS.forEach(function(p){var b=el('button',{type:'button',text:p});b.onclick=function(){chosen=(chosen===p?'':p);[].forEach.call(chips.children,function(x){x.className=(x.textContent===chosen)?'on':''});if(ta)ta.value=chosen;};chips.appendChild(b);});
 var ta=null,nameIn=null,hp=el('input',{'class':'hf-hp',tabindex:'-1',autocomplete:'off','aria-hidden':'true'}),cfDiv=null,cfId=null;
 var send=el('button',{type:'button','class':'hf-send',text:'送出留言'});
-var form=el('div',{},[el('p',{'class':'hf-small',text:mode==='kids'?'點一個想說的話,送出後老師看過才會出現。':'也可以留言;留言會先經過審核才顯示,請不要留電話、Email 等個人資料。'}),chips]);
+var form=el('div',{},[el('p',{'class':'hf-small',text:mode==='kids'?'點一個想說的話,送出就會出現在下面。':'點上面的短語送出會直接出現;自己打的字會先經過審核才顯示,請不要留電話、Email 等個人資料。'}),chips]);
 if(mode==='free'){ta=el('textarea',{maxlength:'300',placeholder:'想說的話(最多 300 字)'});nameIn=el('input',{maxlength:'20',placeholder:'暱稱(可不填)'});form.appendChild(ta);form.appendChild(nameIn);
  if(SITEKEY){cfDiv=el('div',{'class':'hf-cf'});form.appendChild(cfDiv);}}
 form.appendChild(hp);form.appendChild(send);form.appendChild(msg);
-var body=el('div',{},[likeRow,form,list]),sum=null;
+var body=el('div',{},[likeRow,form,tally,list]),sum=null;
 if(fold){sum=el('summary',{text:'💬 按讚・留言'});root.appendChild(el('details',{'class':'hf-fold'},[sum,body]));}else root.appendChild(body);
 function setLikes(n){var t=Number(n||0).toLocaleString('zh-TW');if(n==='?')t='?';likeBtn.textContent=(liked?'👍 已按讚':LIKE)+' · '+t;if(sum)sum.textContent='💬 按讚・留言 · 👍 '+t;}
 // 同一頁有兩份(首頁收合版 + 結算版)時,一份按了另一份跟著變
 window.addEventListener('hfpc-fb-like',function(e){var d=e.detail||{};if(d.g!==g)return;liked=true;likeBtn.className='hf-like on';likeBtn.disabled=true;if(d.likes!=null)setLikes(d.likes);});
-function render(d){setLikes(d.likes);list.innerHTML='';(d.comments||[]).forEach(function(c){var li=el('li',{},[el('span',{text:c.text}),el('span',{'class':'hf-who',text:'  — '+(c.name||'匿名')+(c.at?' · '+c.at.slice(0,10):'')})]);list.appendChild(li);});}
+function render(d){setLikes(d.likes);tally.innerHTML='';var P=d.presets||{};PRESETS.forEach(function(p){if(P[p])tally.appendChild(el('span',{text:p+' × '+Number(P[p]).toLocaleString('zh-TW')}));});list.innerHTML='';(d.comments||[]).forEach(function(c){var li=el('li',{},[el('span',{text:c.text}),el('span',{'class':'hf-who',text:'  — '+(c.name||'匿名')+(c.at?' · '+c.at.slice(0,10):'')})]);list.appendChild(li);});}
 function load(){fetch(API+'/api/feedback?g='+encodeURIComponent(g)).then(function(r){return r.ok?r.json():null}).then(function(d){if(d)render(d)}).catch(function(){});}
 load();
 likeBtn.onclick=function(){if(liked)return;liked=true;try{localStorage.setItem(LK,'1')}catch(e){}likeBtn.className='hf-like on';likeBtn.disabled=true;
@@ -271,7 +277,7 @@ send.onclick=function(){var text=(ta?ta.value:chosen).trim();if(!text){msg.class
  if(cfDiv&&window.turnstile&&cfId!==null&&cfId!==false){try{body.cf=window.turnstile.getResponse(cfId)||'';}catch(e){}}
  send.disabled=true;msg.className='hf-msg';msg.textContent='送出中…';
  fetch(API+'/api/comment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(function(r){return r.json()}).then(function(d){
-  send.disabled=false;if(d&&d.ok){msg.className='hf-msg ok';msg.textContent='收到了,謝謝!審核通過後就會出現在這裡。';if(ta)ta.value='';chosen='';[].forEach.call(chips.children,function(x){x.className=''});if(cfDiv&&window.turnstile&&cfId){try{window.turnstile.reset(cfId)}catch(e){}}}
+  send.disabled=false;if(d&&d.ok){msg.className='hf-msg ok';msg.textContent=d.pending?'收到了,謝謝!審核通過後就會出現在這裡。':'收到了,謝謝!';if(!d.pending)load();if(ta)ta.value='';chosen='';[].forEach.call(chips.children,function(x){x.className=''});if(cfDiv&&window.turnstile&&cfId){try{window.turnstile.reset(cfId)}catch(e){}}}
   else{msg.className='hf-msg err';msg.textContent=(d&&d.error)||'送出失敗,請再試一次';}}).catch(function(){send.disabled=false;msg.className='hf-msg err';msg.textContent='網路不通,請稍後再試';});};
 })();`
   return new Response(src, { headers: { ...CORS, 'Content-Type': 'application/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=600' } })
