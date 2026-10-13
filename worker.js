@@ -1,7 +1,7 @@
 // hfpc-feedback — 全艦隊共用「👍 按讚 + 留言(先待審才顯示)」Worker。like-comment-kit skill 的活實作(2026-10-12)。
 //
 // 原則(使用者 1012 拍板):
-//   ① 按讚零個資:只記 g → 次數;每台裝置每個作品一次(前端 localStorage),伺服器端同 IP 雜湊 10 分鐘去重(不存 IP)。
+//   ① 按讚零個資:只記 g → 次數;每台裝置每個作品一次(前端 localStorage),伺服器端同 IP 雜湊 10 秒去重只擋連點(不存 IP;1013 起,原 10 分鐘會吃掉教室共用 Wi-Fi 的讚)。
 //   ② 留言一律先進「待審」,後台放行(approve)才會出現在網站上;沒放行的誰也看不到。
 //   ③ 兒童站 mode=kids 只能選預設短語,不開自由輸入、不收暱稱。自由輸入 mode=free 要過 Turnstile,
 //      而且擋得到的個資(電話、Email、LINE id、網址)伺服器端一律退回。
@@ -111,7 +111,8 @@ async function postLike(request, url, env) {
   const ua = request.headers.get('User-Agent') || ''
   if (!ua || BOT_RE.test(ua)) return json({ ok: true, skipped: 'bot' })
   const h = await ipHash(request)
-  if (!(await rateOk(env, `like:${g}:${h}`, 600))) {
+  // 1013 使用者拍板:10 分鐘→10 秒(教室共用 Wi-Fi 會吃掉讚;只擋連點與機器人,每台裝置一次靠 localStorage)
+  if (!(await rateOk(env, `like:${g}:${h}`, 10))) {
     const like = await env.DB.prepare('SELECT n FROM likes WHERE g=?').bind(g).first()
     return json({ ok: true, likes: (like && like.n) || 0, dup: true })
   }
