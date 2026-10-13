@@ -214,7 +214,9 @@ async function adminAct(request, url, env) {
 
 // ── 可嵌入的前端 ──
 // 一行接入:<script src="https://hfpc-feedback.summer09201017.workers.dev/widget.js" data-g="<id>" data-mode="free|kids" data-title="<作品名>" defer></script>
-// 會把 UI 放進 #hfpc-feedback(沒有就放在 script 標籤後面)。離線/被擋/Worker 掛了都靜默,不影響作品本身。
+// 會把 UI 放進 data-root 指定的容器(CSS 選擇器),沒給就放 #hfpc-feedback,都沒有就放在 script 標籤後面。
+// data-collapsed:收合成一顆「💬 按讚・留言 · 👍 N」(首頁用);同一頁可放多份,按讚會互相同步。
+//離線/被擋/Worker 掛了都靜默,不影響作品本身。
 function widgetJs(env) {
   const src = `(function(){
 var s=document.currentScript;if(!s)return;
@@ -222,7 +224,9 @@ var g=s.getAttribute('data-g')||'',mode=s.getAttribute('data-mode')==='kids'?'ki
 var LIKE=s.getAttribute('data-like')||(mode==='kids'?'👍 好玩就按個讚':'👍 好聽就按個讚');
 if(!/^[a-z0-9][a-z0-9-]{0,59}$/.test(g))return;
 var API=${JSON.stringify('https://hfpc-feedback.summer09201017.workers.dev')},SITEKEY=${JSON.stringify(env.TURNSTILE_SITEKEY || '')},PRESETS=${JSON.stringify(PRESETS)};
-var root=document.getElementById('hfpc-feedback');if(!root){root=document.createElement('div');root.id='hfpc-feedback';s.parentNode.insertBefore(root,s.nextSibling);}
+var root=null,rs=s.getAttribute('data-root');try{root=rs?document.querySelector(rs):document.getElementById('hfpc-feedback');}catch(e){}
+if(root&&root.getAttribute('data-hf-on'))root=null;if(!root){root=document.createElement('div');if(!document.getElementById('hfpc-feedback'))root.id='hfpc-feedback';s.parentNode.insertBefore(root,s.nextSibling);}
+root.setAttribute('data-hf-on','1');root.classList.add('hfpc-fb');var fold=s.hasAttribute('data-collapsed');
 var LK='hfpc-like:'+g,liked=false;try{liked=localStorage.getItem(LK)==='1';}catch(e){}
 var css='#hfpc-feedback{font:inherit;line-height:1.5;margin:16px 0}#hfpc-feedback *{box-sizing:border-box}'+
 '#hfpc-feedback .hf-like{font:inherit;font-size:1.15em;min-height:48px;padding:8px 20px;border-radius:999px;border:2px solid #d9534f;background:#fff;color:#d9534f;cursor:pointer}'+
@@ -233,8 +237,9 @@ var css='#hfpc-feedback{font:inherit;line-height:1.5;margin:16px 0}#hfpc-feedbac
 '#hfpc-feedback .hf-send{font:inherit;min-height:44px;padding:8px 20px;border-radius:8px;border:0;background:#2a7a3b;color:#fff;cursor:pointer}#hfpc-feedback .hf-send:disabled{opacity:.6}'+
 '#hfpc-feedback .hf-msg{margin:8px 0;min-height:1.5em}#hfpc-feedback .hf-msg.err{color:#b3261e}#hfpc-feedback .hf-msg.ok{color:#2a7a3b}'+
 '#hfpc-feedback .hf-list{list-style:none;padding:0;margin:12px 0 0}#hfpc-feedback .hf-list li{border-top:1px solid #e5e0d8;padding:8px 0}#hfpc-feedback .hf-list .hf-who{opacity:.65;font-size:.9em}'+
-'#hfpc-feedback .hf-hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}#hfpc-feedback .hf-small{opacity:.7;font-size:.9em;margin:4px 0}';
-var st=document.createElement('style');st.textContent=css;document.head.appendChild(st);
+'#hfpc-feedback .hf-hp{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}#hfpc-feedback .hf-small{opacity:.7;font-size:.9em;margin:4px 0}'+
+'#hfpc-feedback .hf-fold>summary{cursor:pointer;display:inline-block;min-height:44px;padding:8px 18px;border-radius:999px;border:2px solid #d9534f;background:#fff;color:#d9534f;font-weight:600;list-style:none}#hfpc-feedback .hf-fold>summary::-webkit-details-marker{display:none}#hfpc-feedback .hf-fold[open]>summary{margin-bottom:8px}';
+css=css.replace(/#hfpc-feedback/g,'.hfpc-fb');if(!document.getElementById('hfpc-fb-css')){var st=document.createElement('style');st.id='hfpc-fb-css';st.textContent=css;document.head.appendChild(st);}
 function el(t,a,c){var e=document.createElement(t);for(var k in (a||{})){if(k==='text')e.textContent=a[k];else if(k==='html')e.innerHTML=a[k];else e.setAttribute(k,a[k]);}(c||[]).forEach(function(x){e.appendChild(x)});return e;}
 var likeBtn=el('button',{type:'button','class':'hf-like'+(liked?' on':''),text:(liked?'👍 已按讚':LIKE)+' · 0'});
 var likeRow=el('p',{},[likeBtn]);
@@ -248,13 +253,16 @@ var form=el('div',{},[el('p',{'class':'hf-small',text:mode==='kids'?'點一個�
 if(mode==='free'){ta=el('textarea',{maxlength:'300',placeholder:'想說的話(最多 300 字)'});nameIn=el('input',{maxlength:'20',placeholder:'暱稱(可不填)'});form.appendChild(ta);form.appendChild(nameIn);
  if(SITEKEY){cfDiv=el('div',{'class':'hf-cf'});form.appendChild(cfDiv);}}
 form.appendChild(hp);form.appendChild(send);form.appendChild(msg);
-root.appendChild(el('div',{},[likeRow,form,list]));
-function setLikes(n){likeBtn.textContent=(liked?'👍 已按讚':LIKE)+' · '+Number(n||0).toLocaleString('zh-TW');}
+var body=el('div',{},[likeRow,form,list]),sum=null;
+if(fold){sum=el('summary',{text:'💬 按讚・留言'});root.appendChild(el('details',{'class':'hf-fold'},[sum,body]));}else root.appendChild(body);
+function setLikes(n){var t=Number(n||0).toLocaleString('zh-TW');if(n==='?')t='?';likeBtn.textContent=(liked?'👍 已按讚':LIKE)+' · '+t;if(sum)sum.textContent='💬 按讚・留言 · 👍 '+t;}
+// 同一頁有兩份(首頁收合版 + 結算版)時,一份按了另一份跟著變
+window.addEventListener('hfpc-fb-like',function(e){var d=e.detail||{};if(d.g!==g)return;liked=true;likeBtn.className='hf-like on';likeBtn.disabled=true;if(d.likes!=null)setLikes(d.likes);});
 function render(d){setLikes(d.likes);list.innerHTML='';(d.comments||[]).forEach(function(c){var li=el('li',{},[el('span',{text:c.text}),el('span',{'class':'hf-who',text:'  — '+(c.name||'匿名')+(c.at?' · '+c.at.slice(0,10):'')})]);list.appendChild(li);});}
 function load(){fetch(API+'/api/feedback?g='+encodeURIComponent(g)).then(function(r){return r.ok?r.json():null}).then(function(d){if(d)render(d)}).catch(function(){});}
 load();
 likeBtn.onclick=function(){if(liked)return;liked=true;try{localStorage.setItem(LK,'1')}catch(e){}likeBtn.className='hf-like on';likeBtn.disabled=true;
- fetch(API+'/api/like?g='+encodeURIComponent(g),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:title})}).then(function(r){return r.ok?r.json():null}).then(function(d){if(d)setLikes(d.likes);}).catch(function(){setLikes('?')});};
+ fetch(API+'/api/like?g='+encodeURIComponent(g),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:title})}).then(function(r){return r.ok?r.json():null}).then(function(d){if(d){setLikes(d.likes);try{window.dispatchEvent(new CustomEvent('hfpc-fb-like',{detail:{g:g,likes:d.likes}}))}catch(e){}}}).catch(function(){setLikes('?')});};
 function ensureCf(){if(!cfDiv||cfId!==null)return;cfId=false;function go(){try{cfId=window.turnstile.render(cfDiv,{sitekey:SITEKEY,language:'zh-tw'});}catch(e){cfId=false}}
  if(window.turnstile)go();else{var sc=document.createElement('script');sc.src='https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';sc.async=true;sc.onload=go;document.head.appendChild(sc);}}
 if(ta){ta.addEventListener('focus',ensureCf);}chips.addEventListener('click',ensureCf);
