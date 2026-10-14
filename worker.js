@@ -230,12 +230,15 @@ async function adminAct(request, url, env) {
 // 一行接入:<script src="https://hfpc-feedback.summer09201017.workers.dev/widget.js" data-g="<id>" data-mode="free|kids" data-title="<作品名>" defer></script>
 // 會把 UI 放進 data-root 指定的容器(CSS 選擇器),沒給就放 #hfpc-feedback,都沒有就放在 script 標籤後面。
 // data-collapsed:收合成一顆「💬 按讚・留言 · 👍 N」(首頁用);同一頁可放多份,按讚會互相同步。
+// data-report(1015,內容站用):打字框上多一排「✏️ 有錯字 / 🎸 和弦不對 / 🎵 音不對」(可用逗號自訂),點了在打字框填「【有錯字】第  節、哪個字:」,
+//   照打字留言走 Turnstile + 待審,後台看得到是哪一種問題;不新增資料表、不公開顯示計數(修好了計數也不會歸零,公開會誤導)。
 //離線/被擋/Worker 掛了都靜默,不影響作品本身。
 function widgetJs(env) {
   const src = `(function(){
 var s=document.currentScript;if(!s)return;
 var g=s.getAttribute('data-g')||'',mode=s.getAttribute('data-mode')==='kids'?'kids':'free',title=s.getAttribute('data-title')||document.title||'';
 var LIKE=s.getAttribute('data-like')||(mode==='kids'?'👍 好玩就按個讚':'👍 好聽就按個讚');
+var REPORT=s.hasAttribute('data-report')?(s.getAttribute('data-report')||'✏️ 有錯字,🎸 和弦不對,🎵 音不對').split(',').filter(Boolean):[];
 if(!/^[a-z0-9][a-z0-9-]{0,59}$/.test(g))return;
 var API=${JSON.stringify('https://hfpc-feedback.summer09201017.workers.dev')},SITEKEY=${JSON.stringify(env.TURNSTILE_SITEKEY || '')},PRESETS=${JSON.stringify(PRESETS)};
 var root=null,rs=s.getAttribute('data-root');try{root=rs?document.querySelector(rs):document.getElementById('hfpc-feedback');}catch(e){}
@@ -265,7 +268,11 @@ PRESETS.forEach(function(p){var b=el('button',{type:'button',text:p,'aria-presse
 var ta=null,nameIn=null,hp=el('input',{'class':'hf-hp',tabindex:'-1',autocomplete:'off','aria-hidden':'true'}),cfDiv=null,cfId=null;
 var send=el('button',{type:'button','class':'hf-send',text:'送出留言'});
 var form=el('div',{},[el('p',{'class':'hf-small',text:mode==='kids'?'短語可以一次點好幾句,送出馬上就會出現在下面;自己打的字要等老師看過才會出現(不要寫電話、地址、姓名喔)。':'上面的短語可以一次點好幾句,送出會直接出現;自己打的字會先經過審核才顯示,請不要留電話、Email 等個人資料。'}),chips]);
-{ta=el('textarea',{maxlength:'300',placeholder:mode==='kids'?'也可以自己打字(最多 300 字)':'想說的話(最多 300 字)'});form.appendChild(ta);if(mode==='free'){nameIn=el('input',{maxlength:'20',placeholder:'暱稱(可不填)'});form.appendChild(nameIn);}
+{ta=el('textarea',{maxlength:'300',placeholder:mode==='kids'?'也可以自己打字(最多 300 字)':'想說的話(最多 300 字)'});
+ if(REPORT.length){var rep=el('div',{'class':'hf-chips hf-report'},[el('span',{'class':'hf-small',text:'回報問題:'})]);
+  REPORT.forEach(function(p){var b=el('button',{type:'button',text:p});b.onclick=function(){var tag='【'+p.replace(/^\\S+\\s+/,'')+'】第 ';ta.value=tag+' 節、哪個字:'+(ta.value&&ta.value.indexOf('【')!==0?' '+ta.value:'');ta.focus();try{ta.setSelectionRange(tag.length,tag.length);}catch(e){}ensureCf();};rep.appendChild(b);});
+  form.appendChild(rep);}
+ form.appendChild(ta);if(mode==='free'){nameIn=el('input',{maxlength:'20',placeholder:'暱稱(可不填)'});form.appendChild(nameIn);}
  if(SITEKEY){cfDiv=el('div',{'class':'hf-cf'});form.appendChild(cfDiv);}}
 form.appendChild(hp);form.appendChild(send);form.appendChild(msg);
 var body=el('div',{},[likeRow,form,tally,list]),sum=null;
